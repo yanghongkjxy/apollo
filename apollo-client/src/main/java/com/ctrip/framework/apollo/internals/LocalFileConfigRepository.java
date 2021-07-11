@@ -1,23 +1,23 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.internals;
 
-import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
-
-import com.ctrip.framework.apollo.core.ConfigConsts;
-import com.ctrip.framework.apollo.core.utils.ClassLoaderUtil;
-import com.ctrip.framework.apollo.exceptions.ApolloConfigException;
-import com.ctrip.framework.apollo.util.ConfigUtil;
-import com.ctrip.framework.apollo.util.ExceptionUtil;
-import com.dianping.cat.Cat;
-import com.dianping.cat.message.Message;
-import com.dianping.cat.message.Transaction;
-
-import org.codehaus.plexus.PlexusContainer;
-import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.unidal.lookup.ContainerLoader;
-
+import com.ctrip.framework.apollo.core.utils.DeferredLoggerFactory;
+import com.ctrip.framework.apollo.enums.ConfigSourceType;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -29,19 +29,33 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Properties;
 
+import org.slf4j.Logger;
+
+import com.ctrip.framework.apollo.build.ApolloInjector;
+import com.ctrip.framework.apollo.core.ConfigConsts;
+import com.ctrip.framework.apollo.core.utils.ClassLoaderUtil;
+import com.ctrip.framework.apollo.exceptions.ApolloConfigException;
+import com.ctrip.framework.apollo.tracer.Tracer;
+import com.ctrip.framework.apollo.tracer.spi.Transaction;
+import com.ctrip.framework.apollo.util.ConfigUtil;
+import com.ctrip.framework.apollo.util.ExceptionUtil;
+import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
+
 /**
  * @author Jason Song(song_s@ctrip.com)
  */
 public class LocalFileConfigRepository extends AbstractConfigRepository
     implements RepositoryChangeListener {
-  private static final Logger logger = LoggerFactory.getLogger(LocalFileConfigRepository.class);
+  private static final Logger logger = DeferredLoggerFactory.getLogger(LocalFileConfigRepository.class);
   private static final String CONFIG_DIR = "/config-cache";
-  private final PlexusContainer m_container;
   private final String m_namespace;
   private File m_baseDir;
   private final ConfigUtil m_configUtil;
   private volatile Properties m_fileProperties;
   private volatile ConfigRepository m_upstream;
+
+  private volatile ConfigSourceType m_sourceType = ConfigSourceType.LOCAL;
 
   /**
    * Constructor.
@@ -54,13 +68,7 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
 
   public LocalFileConfigRepository(String namespace, ConfigRepository upstream) {
     m_namespace = namespace;
-    m_container = ContainerLoader.getDefaultContainer();
-    try {
-      m_configUtil = m_container.lookup(ConfigUtil.class);
-    } catch (ComponentLookupException ex) {
-      Cat.logError(ex);
-      throw new ApolloConfigException("Unable to load component!", ex);
-    }
+    m_configUtil = ApolloInjector.getInstance(ConfigUtil.class);
     this.setLocalCacheDir(findLocalCacheDir(), false);
     this.setUpstreamRepository(upstream);
     this.trySync();
@@ -96,7 +104,7 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
     if (m_fileProperties == null) {
       sync();
     }
-    Properties result = new Properties();
+    Properties result = propertiesFactory.getPropertiesInstance();
     result.putAll(m_fileProperties);
     return result;
   }
@@ -111,8 +119,12 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
       m_upstream.removeChangeListener(this);
     }
     m_upstream = upstreamConfigRepository;
-    trySyncFromUpstream();
     upstreamConfigRepository.addChangeListener(this);
+  }
+
+  @Override
+  public ConfigSourceType getSourceType() {
+    return m_sourceType;
   }
 
   @Override
@@ -120,9 +132,9 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
     if (newProperties.equals(m_fileProperties)) {
       return;
     }
-    Properties newFileProperties = new Properties();
+    Properties newFileProperties = propertiesFactory.getPropertiesInstance();
     newFileProperties.putAll(newProperties);
-    updateFileProperties(newFileProperties);
+    updateFileProperties(newFileProperties, m_upstream.getSourceType());
     this.fireRepositoryChange(namespace, newProperties);
   }
 
@@ -135,14 +147,15 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
       return;
     }
 
-    Transaction transaction = Cat.newTransaction("Apollo.ConfigService", "syncLocalConfig");
+    Transaction transaction = Tracer.newTransaction("Apollo.ConfigService", "syncLocalConfig");
     Throwable exception = null;
     try {
       transaction.addData("Basedir", m_baseDir.getAbsolutePath());
       m_fileProperties = this.loadFromLocalCacheFile(m_baseDir, m_namespace);
-      transaction.setStatus(Message.SUCCESS);
+      m_sourceType = ConfigSourceType.LOCAL;
+      transaction.setStatus(Transaction.SUCCESS);
     } catch (Throwable ex) {
-      Cat.logError(ex);
+      Tracer.logEvent("ApolloConfigException", ExceptionUtil.getDetailMessage(ex));
       transaction.setStatus(ex);
       exception = ex;
       //ignore
@@ -151,6 +164,7 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
     }
 
     if (m_fileProperties == null) {
+      m_sourceType = ConfigSourceType.NONE;
       throw new ApolloConfigException(
           "Load config from local config failed!", exception);
     }
@@ -161,11 +175,10 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
       return false;
     }
     try {
-      Properties properties = m_upstream.getConfig();
-      updateFileProperties(properties);
+      updateFileProperties(m_upstream.getConfig(), m_upstream.getSourceType());
       return true;
     } catch (Throwable ex) {
-      Cat.logError(ex);
+      Tracer.logError(ex);
       logger
           .warn("Sync config from upstream repository {} failed, reason: {}", m_upstream.getClass(),
               ExceptionUtil.getDetailMessage(ex));
@@ -173,7 +186,8 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
     return false;
   }
 
-  private synchronized void updateFileProperties(Properties newProperties) {
+  private synchronized void updateFileProperties(Properties newProperties, ConfigSourceType sourceType) {
+    this.m_sourceType = sourceType;
     if (newProperties.equals(m_fileProperties)) {
       return;
     }
@@ -192,12 +206,11 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
 
       try {
         in = new FileInputStream(file);
-
-        properties = new Properties();
+        properties = propertiesFactory.getPropertiesInstance();
         properties.load(in);
         logger.debug("Loading local config file {} successfully!", file.getAbsolutePath());
       } catch (IOException ex) {
-        Cat.logError(ex);
+        Tracer.logError(ex);
         throw new ApolloConfigException(String
             .format("Loading config from local cache file %s failed", file.getAbsolutePath()), ex);
       } finally {
@@ -225,17 +238,17 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
 
     OutputStream out = null;
 
-    Transaction transaction = Cat.newTransaction("Apollo.ConfigService", "persistLocalConfigFile");
+    Transaction transaction = Tracer.newTransaction("Apollo.ConfigService", "persistLocalConfigFile");
     transaction.addData("LocalConfigFile", file.getAbsolutePath());
     try {
       out = new FileOutputStream(file);
       m_fileProperties.store(out, "Persisted by DefaultConfig");
-      transaction.setStatus(Message.SUCCESS);
+      transaction.setStatus(Transaction.SUCCESS);
     } catch (IOException ex) {
       ApolloConfigException exception =
           new ApolloConfigException(
               String.format("Persist local cache file %s failed", file.getAbsolutePath()), ex);
-      Cat.logError(exception);
+      Tracer.logError(exception);
       transaction.setStatus(exception);
       logger.warn("Persist local cache file {} failed, reason: {}.", file.getAbsolutePath(),
           ExceptionUtil.getDetailMessage(ex));
@@ -255,17 +268,17 @@ public class LocalFileConfigRepository extends AbstractConfigRepository
     if (baseDir.exists()) {
       return;
     }
-    Transaction transaction = Cat.newTransaction("Apollo.ConfigService", "createLocalConfigDir");
+    Transaction transaction = Tracer.newTransaction("Apollo.ConfigService", "createLocalConfigDir");
     transaction.addData("BaseDir", baseDir.getAbsolutePath());
     try {
       Files.createDirectory(baseDir.toPath());
-      transaction.setStatus(Message.SUCCESS);
+      transaction.setStatus(Transaction.SUCCESS);
     } catch (IOException ex) {
       ApolloConfigException exception =
           new ApolloConfigException(
               String.format("Create local config directory %s failed", baseDir.getAbsolutePath()),
               ex);
-      Cat.logError(exception);
+      Tracer.logError(exception);
       transaction.setStatus(exception);
       logger.warn(
           "Unable to create local config cache directory {}, reason: {}. Will not able to cache config file.",

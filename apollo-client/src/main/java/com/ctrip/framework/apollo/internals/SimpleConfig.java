@@ -1,21 +1,36 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.internals;
 
-import com.google.common.base.Function;
-import com.google.common.collect.Maps;
-
-import com.ctrip.framework.apollo.model.ConfigChange;
-import com.ctrip.framework.apollo.model.ConfigChangeEvent;
-import com.ctrip.framework.apollo.util.ExceptionUtil;
-import com.dianping.cat.Cat;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import com.ctrip.framework.apollo.enums.ConfigSourceType;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.ctrip.framework.apollo.model.ConfigChange;
+import com.ctrip.framework.apollo.tracer.Tracer;
+import com.ctrip.framework.apollo.util.ExceptionUtil;
+import com.google.common.base.Function;
+import com.google.common.collect.Maps;
 
 /**
  * @author Jason Song(song_s@ctrip.com)
@@ -25,6 +40,7 @@ public class SimpleConfig extends AbstractConfig implements RepositoryChangeList
   private final String m_namespace;
   private final ConfigRepository m_configRepository;
   private volatile Properties m_configProperties;
+  private volatile ConfigSourceType m_sourceType = ConfigSourceType.NONE;
 
   /**
    * Constructor.
@@ -40,9 +56,9 @@ public class SimpleConfig extends AbstractConfig implements RepositoryChangeList
 
   private void initialize() {
     try {
-      m_configProperties = m_configRepository.getConfig();
+      updateConfig(m_configRepository.getConfig(), m_configRepository.getSourceType());
     } catch (Throwable ex) {
-      Cat.logError(ex);
+      Tracer.logError(ex);
       logger.warn("Init Apollo Simple Config failed - namespace: {}, reason: {}", m_namespace,
           ExceptionUtil.getDetailMessage(ex));
     } finally {
@@ -71,16 +87,19 @@ public class SimpleConfig extends AbstractConfig implements RepositoryChangeList
   }
 
   @Override
+  public ConfigSourceType getSourceType() {
+    return m_sourceType;
+  }
+
+  @Override
   public synchronized void onRepositoryChange(String namespace, Properties newProperties) {
     if (newProperties.equals(m_configProperties)) {
       return;
     }
-    Properties newConfigProperties = new Properties();
+    Properties newConfigProperties = propertiesFactory.getPropertiesInstance();
     newConfigProperties.putAll(newProperties);
 
-    List<ConfigChange>
-        changes =
-        calcPropertyChanges(namespace, m_configProperties, newConfigProperties);
+    List<ConfigChange> changes = calcPropertyChanges(namespace, m_configProperties, newConfigProperties);
     Map<String, ConfigChange> changeMap = Maps.uniqueIndex(changes,
         new Function<ConfigChange, String>() {
           @Override
@@ -89,10 +108,16 @@ public class SimpleConfig extends AbstractConfig implements RepositoryChangeList
           }
         });
 
+    updateConfig(newConfigProperties, m_configRepository.getSourceType());
+    clearConfigCache();
+
+    this.fireConfigChange(m_namespace, changeMap);
+
+    Tracer.logEvent("Apollo.Client.ConfigChanges", m_namespace);
+  }
+
+  private void updateConfig(Properties newConfigProperties, ConfigSourceType sourceType) {
     m_configProperties = newConfigProperties;
-
-    this.fireConfigChange(new ConfigChangeEvent(m_namespace, changeMap));
-
-    Cat.logEvent("Apollo.Client.ConfigChanges", m_namespace);
+    m_sourceType = sourceType;
   }
 }

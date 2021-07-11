@@ -1,16 +1,31 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.common.customize;
 
 import com.google.common.base.Strings;
 
+import com.ctrip.framework.apollo.tracer.Tracer;
 import com.ctrip.framework.foundation.Foundation;
-import com.dianping.cat.Cat;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
-
 
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.core.Appender;
@@ -36,7 +51,7 @@ public abstract class LoggingCustomizer implements InitializingBean {
       tryConfigCLogging();
     } catch (Throwable ex) {
       logger.error("Config CLogging failed", ex);
-      Cat.logError(ex);
+      Tracer.logError(ex);
     }
 
   }

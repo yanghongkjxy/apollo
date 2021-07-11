@@ -1,36 +1,52 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.portal.service;
 
-import com.ctrip.framework.apollo.core.ConfigConsts;
 import com.ctrip.framework.apollo.common.dto.ItemChangeSets;
 import com.ctrip.framework.apollo.common.dto.ItemDTO;
 import com.ctrip.framework.apollo.common.dto.NamespaceDTO;
+import com.ctrip.framework.apollo.core.ConfigConsts;
 import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
-import com.ctrip.framework.apollo.core.enums.Env;
+import com.ctrip.framework.apollo.portal.environment.Env;
+import com.ctrip.framework.apollo.portal.AbstractUnitTest;
 import com.ctrip.framework.apollo.portal.api.AdminServiceAPI;
-import com.ctrip.framework.apollo.portal.auth.UserInfoHolder;
-import com.ctrip.framework.apollo.portal.entity.po.UserInfo;
+import com.ctrip.framework.apollo.portal.spi.UserInfoHolder;
+import com.ctrip.framework.apollo.portal.entity.bo.UserInfo;
+import com.ctrip.framework.apollo.portal.component.txtresolver.PropertyResolver;
+import com.ctrip.framework.apollo.portal.entity.model.NamespaceTextModel;
 import com.ctrip.framework.apollo.portal.entity.vo.ItemDiffs;
 import com.ctrip.framework.apollo.portal.entity.vo.NamespaceIdentifier;
-import com.ctrip.framework.apollo.portal.entity.form.NamespaceTextModel;
-import com.ctrip.framework.apollo.portal.service.txtresolver.PropertyResolver;
 
+import java.util.Collections;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-@RunWith(MockitoJUnitRunner.class)
-public class ConfigServiceTest {
+public class ConfigServiceTest extends AbstractUnitTest {
 
   @Mock
   private AdminServiceAPI.NamespaceAPI namespaceAPI;
@@ -56,6 +72,7 @@ public class ConfigServiceTest {
     String appId = "6666";
     String clusterName = "default";
     String namespaceName = "application";
+    long someNamespaceId = 123L;
 
     NamespaceTextModel model = new NamespaceTextModel();
     model.setEnv("DEV");
@@ -68,8 +85,12 @@ public class ConfigServiceTest {
     ItemChangeSets changeSets = new ItemChangeSets();
     changeSets.addCreateItem(new ItemDTO("d", "c", "", 4));
 
+    NamespaceDTO someNamespaceDto = mock(NamespaceDTO.class);
+    when(someNamespaceDto.getId()).thenReturn(someNamespaceId);
+    when(namespaceAPI.loadNamespace(appId, model.getEnv(), clusterName, namespaceName))
+        .thenReturn(someNamespaceDto);
     when(itemAPI.findItems(appId, Env.DEV, clusterName, namespaceName)).thenReturn(itemDTOs);
-    when(resolver.resolve(0, model.getConfigText(), itemDTOs)).thenReturn(changeSets);
+    when(resolver.resolve(someNamespaceId, model.getConfigText(), itemDTOs)).thenReturn(changeSets);
 
     UserInfo userInfo = new UserInfo();
     userInfo.setUserId("test");
@@ -77,7 +98,7 @@ public class ConfigServiceTest {
 
     try {
       configService.updateConfigItemByText(model);
-    }catch (Exception e){
+    } catch (Exception e) {
       Assert.fail();
     }
   }
@@ -94,13 +115,15 @@ public class ConfigServiceTest {
   }
 
   @Test
-  public void testCompareTargetNamespaceHasNoItems(){
-    ItemDTO sourceItem1 = new ItemDTO("a","b","comment",1);
-    List<ItemDTO> sourceItems = Arrays.asList(sourceItem1);
+  public void testCompareTargetNamespaceHasNoItems() {
+    ItemDTO sourceItem1 = new ItemDTO("a", "b", "comment", 1);
+    List<ItemDTO> sourceItems = Collections.singletonList(sourceItem1);
 
     String appId = "6666", env = "LOCAL", clusterName = ConfigConsts.CLUSTER_NAME_DEFAULT,
         namespaceName = ConfigConsts.NAMESPACE_APPLICATION;
-    List<NamespaceIdentifier> namespaceIdentifiers = generateNamespaceIdentifer(appId, env, clusterName, namespaceName);
+    List<NamespaceIdentifier>
+        namespaceIdentifiers =
+        generateNamespaceIdentifier(appId, env, clusterName, namespaceName);
     NamespaceDTO namespaceDTO = generateNamespaceDTO(appId, clusterName, namespaceName);
 
     when(namespaceAPI.loadNamespace(appId, Env.valueOf(env), clusterName, namespaceName)).thenReturn(namespaceDTO);
@@ -112,7 +135,7 @@ public class ConfigServiceTest {
 
     List<ItemDiffs> itemDiffses = configService.compare(namespaceIdentifiers, sourceItems);
 
-    assertEquals(1,itemDiffses.size());
+    assertEquals(1, itemDiffses.size());
     ItemDiffs itemDiffs = itemDiffses.get(0);
     ItemChangeSets changeSets = itemDiffs.getDiffs();
     assertEquals(0, changeSets.getUpdateItems().size());
@@ -127,21 +150,23 @@ public class ConfigServiceTest {
   }
 
   @Test
-  public void testCompare(){
-    ItemDTO sourceItem1 = new ItemDTO("a","b","comment",1);//not modified
-    ItemDTO sourceItem2 = new ItemDTO("newKey","c","comment",2);//new item
-    ItemDTO sourceItem3 = new ItemDTO("c","newValue","comment",3);// update value
-    ItemDTO sourceItem4 = new ItemDTO("d","b","newComment",4);// update comment
+  public void testCompare() {
+    ItemDTO sourceItem1 = new ItemDTO("a", "b", "comment", 1);//not modified
+    ItemDTO sourceItem2 = new ItemDTO("newKey", "c", "comment", 2);//new item
+    ItemDTO sourceItem3 = new ItemDTO("c", "newValue", "comment", 3);// update value
+    ItemDTO sourceItem4 = new ItemDTO("d", "b", "newComment", 4);// update comment
     List<ItemDTO> sourceItems = Arrays.asList(sourceItem1, sourceItem2, sourceItem3, sourceItem4);
 
-    ItemDTO targetItem1 = new ItemDTO("a","b","comment",1);
-    ItemDTO targetItem2 = new ItemDTO("c","oldValue","comment",2);
-    ItemDTO targetItem3 = new ItemDTO("d","b","oldComment",3);
+    ItemDTO targetItem1 = new ItemDTO("a", "b", "comment", 1);
+    ItemDTO targetItem2 = new ItemDTO("c", "oldValue", "comment", 2);
+    ItemDTO targetItem3 = new ItemDTO("d", "b", "oldComment", 3);
     List<ItemDTO> targetItems = Arrays.asList(targetItem1, targetItem2, targetItem3);
 
     String appId = "6666", env = "LOCAL", clusterName = ConfigConsts.CLUSTER_NAME_DEFAULT,
         namespaceName = ConfigConsts.NAMESPACE_APPLICATION;
-    List<NamespaceIdentifier> namespaceIdentifiers = generateNamespaceIdentifer(appId, env, clusterName, namespaceName);
+    List<NamespaceIdentifier>
+        namespaceIdentifiers =
+        generateNamespaceIdentifier(appId, env, clusterName, namespaceName);
     NamespaceDTO namespaceDTO = generateNamespaceDTO(appId, clusterName, namespaceName);
 
     when(namespaceAPI.loadNamespace(appId, Env.valueOf(env), clusterName, namespaceName)).thenReturn(namespaceDTO);
@@ -189,7 +214,7 @@ public class ConfigServiceTest {
 
   }
 
-  private NamespaceDTO generateNamespaceDTO(String appId, String clusterName, String namespaceName){
+  private NamespaceDTO generateNamespaceDTO(String appId, String clusterName, String namespaceName) {
     NamespaceDTO namespaceDTO = new NamespaceDTO();
     namespaceDTO.setAppId(appId);
     namespaceDTO.setId(1);
@@ -198,13 +223,14 @@ public class ConfigServiceTest {
     return namespaceDTO;
   }
 
-  private List<NamespaceIdentifier> generateNamespaceIdentifer(String appId, String env, String clusterName, String namespaceName){
+  private List<NamespaceIdentifier> generateNamespaceIdentifier(String appId, String env, String clusterName,
+                                                                String namespaceName) {
     NamespaceIdentifier targetNamespace = new NamespaceIdentifier();
     targetNamespace.setAppId(appId);
     targetNamespace.setEnv(env);
     targetNamespace.setClusterName(clusterName);
     targetNamespace.setNamespaceName(namespaceName);
-    return Arrays.asList(targetNamespace);
+    return Collections.singletonList(targetNamespace);
   }
 
 }

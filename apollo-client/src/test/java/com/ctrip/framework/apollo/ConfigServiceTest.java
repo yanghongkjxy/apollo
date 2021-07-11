@@ -1,33 +1,55 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo;
 
+import static org.junit.Assert.assertEquals;
+
+import com.ctrip.framework.apollo.enums.ConfigSourceType;
+import java.util.Set;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import com.ctrip.framework.apollo.build.MockInjector;
 import com.ctrip.framework.apollo.core.ConfigConsts;
 import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
 import com.ctrip.framework.apollo.internals.AbstractConfig;
 import com.ctrip.framework.apollo.spi.ConfigFactory;
 import com.ctrip.framework.apollo.util.ConfigUtil;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.unidal.lookup.ComponentTestCase;
-
-import java.util.Set;
-
-import static org.junit.Assert.assertEquals;
-
 /**
  * @author Jason Song(song_s@ctrip.com)
  */
-public class ConfigServiceTest extends ComponentTestCase {
+public class ConfigServiceTest {
   private static String someAppId;
 
-  @Override
   @Before
   public void setUp() throws Exception {
-    super.setUp();
     someAppId = "someAppId";
+
+    MockInjector.setInstance(ConfigUtil.class, new MockConfigUtil());
+  }
+
+  @After
+  public void tearDown() throws Exception {
     //as ConfigService is singleton, so we must manually clear its container
-    ConfigService.setContainer(getContainer());
-    defineComponent(ConfigUtil.class, MockConfigUtil.class);
+    ConfigService.reset();
+    MockInjector.reset();
   }
 
   @Test
@@ -57,7 +79,7 @@ public class ConfigServiceTest extends ComponentTestCase {
   public void testMockConfigFactory() throws Exception {
     String someNamespace = "mock";
     String someKey = "someKey";
-    defineComponent(ConfigFactory.class, someNamespace, MockConfigFactory.class);
+    MockInjector.setInstance(ConfigFactory.class, someNamespace, new MockConfigFactory());
 
     Config config = ConfigService.getConfig(someNamespace);
 
@@ -71,7 +93,7 @@ public class ConfigServiceTest extends ComponentTestCase {
     ConfigFileFormat someConfigFileFormat = ConfigFileFormat.Properties;
     String someNamespaceFileName =
         String.format("%s.%s", someNamespace, someConfigFileFormat.getValue());
-    defineComponent(ConfigFactory.class, someNamespaceFileName, MockConfigFactory.class);
+    MockInjector.setInstance(ConfigFactory.class, someNamespaceFileName, new MockConfigFactory());
 
     ConfigFile configFile = ConfigService.getConfigFile(someNamespace, someConfigFileFormat);
 
@@ -97,6 +119,11 @@ public class ConfigServiceTest extends ComponentTestCase {
 
     @Override
     public Set<String> getPropertyNames() {
+      return null;
+    }
+
+    @Override
+    public ConfigSourceType getSourceType() {
       return null;
     }
   }
@@ -129,6 +156,21 @@ public class ConfigServiceTest extends ComponentTestCase {
     @Override
     public ConfigFileFormat getConfigFileFormat() {
       return m_configFileFormat;
+    }
+
+    @Override
+    public void addChangeListener(ConfigFileChangeListener listener) {
+
+    }
+
+    @Override
+    public boolean removeChangeListener(ConfigFileChangeListener listener) {
+      return false;
+    }
+
+    @Override
+    public ConfigSourceType getSourceType() {
+      return null;
     }
   }
 

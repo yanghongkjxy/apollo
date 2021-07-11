@@ -1,127 +1,124 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 /** navbar */
-directive_module.directive('apollonav', function ($compile, $window, toastr, AppUtil, AppService, EnvService, UserService) {
-    return {
-        restrict: 'E',
-        templateUrl: '../../views/common/nav.html',
-        transclude: true,
-        replace: true,
-        link: function (scope, element, attrs) {
+directive_module.directive('apollonav',
+    function ($compile, $window, $translate, toastr, AppUtil, AppService, EnvService,
+        UserService, CommonService, PermissionService) {
+        return {
+            restrict: 'E',
+            templateUrl: AppUtil.prefixPath() + '/views/common/nav.html',
+            transclude: true,
+            replace: true,
+            link: function (scope, element, attrs) {
 
-            scope.sourceApps = [];
-            scope.copyedApps = [];
-
-            AppService.find_all_app().then(function (result) {
-                result.forEach(function (app) {
-                    app.selected = false;
-                    scope.sourceApps.push(app);
+                CommonService.getPageSetting().then(function (setting) {
+                    scope.pageSetting = setting;
                 });
-                scope.copyedApps = angular.copy(scope.sourceApps);
-            }, function (result) {
-                toastr.error(AppUtil.errorMsg(result), "load apps error");
-            });
 
-            scope.searchKey = '';
-            scope.shouldShowAppList = false;
+               // Looks like a trick to make xml/yml/json namespaces display right, but why?
+               $(document).on('click', function () {
+                   scope.$apply(function () {});
+               });
 
-            var selectedApp = {};
-            scope.selectApp = function (app) {
-                select(app);
-                scope.jumpToConfigPage();
-            };
+               $translate('ApolloConfirmDialog.SearchPlaceHolder').then(function(placeholderLabel)  {
+                   $('#app-search-list').select2({
+                      placeholder: placeholderLabel,
+                      ajax: {
+                        url: AppUtil.prefixPath() + "/apps/search/by-appid-or-name",
+                        dataType: 'json',
+                        delay: 400,
+                        data: function (params) {
+                            return {
+                                query: params.term || '',
+                                page: params.page ? params.page - 1 : 0,
+                                    size: 20
+                                };
+                            },
+                            processResults: function (data) {
+                                if (data && data.content) {
+                                    var hasMore = data.content.length
+                                        === data.size;
+                                    var result = [];
+                                    data.content.forEach(function (app) {
+                                        result.push({
+                                            id: app.appId,
+                                            text: app.appId + ' / ' + app.name
+                                        })
+                                    });
+                                    return {
+                                        results: result,
+                                        pagination: {
+                                            more: hasMore
+                                        }
+                                    };
+                                } else {
+                                    return {
+                                        results: [],
+                                        pagination: {
+                                            more: false
+                                        }
+                                    };
+                                }
 
-            scope.changeSearchKey = function () {
-                scope.copyedApps = [];
-                var searchKey = scope.searchKey.toLocaleLowerCase();
-                scope.sourceApps.forEach(function (app) {
-                    if (app.name.toLocaleLowerCase().indexOf(searchKey) > -1
-                        || app.appId.toLocaleLowerCase().indexOf(searchKey) > -1) {
-                        scope.copyedApps.push(app);
-                    }
+                            }
+                        }
+                    });
+
+                    $('#app-search-list').on('select2:select', function () {
+                        var selected = $('#app-search-list').select2('data');
+                        if (selected && selected.length) {
+                            jumpToConfigPage(selected[0].id)
+                        }
+                    });
                 });
-                scope.shouldShowAppList = true;
-            };
 
-            scope.jumpToConfigPage = function () {
-                if (selectedApp.appId) {
+                function jumpToConfigPage(selectedAppId) {
                     if ($window.location.href.indexOf("config.html") > -1) {
-                        $window.location.hash = "appid=" + selectedApp.appId;
+                        $window.location.hash = "appid=" + selectedAppId;
                         $window.location.reload();
-                    }else {
-                        $window.location.href = '/config.html?#appid=' + selectedApp.appId;
-                    }
-                }
-            };
-
-            //up:38 down:40 enter:13
-            var selectedAppIdx = -1;
-            element.bind("keydown keypress", function (event) {
-
-                if (event.keyCode == 40) {
-                    if (selectedAppIdx < scope.copyedApps.length - 1) {
-                        clearAppsSelectedStatus();
-                        scope.copyedApps[++selectedAppIdx].selected = true;
-                    }
-                } else if (event.keyCode == 38) {
-                    if (selectedAppIdx >= 1) {
-                        clearAppsSelectedStatus();
-                        scope.copyedApps[--selectedAppIdx].selected = true;
-                    }
-                } else if (event.keyCode == 13) {
-                    if (scope.shouldShowAppList && selectedAppIdx > -1) {
-                        select(scope.copyedApps[selectedAppIdx]);
-                        event.preventDefault();
                     } else {
-                        scope.jumpToConfigPage();
+                        $window.location.href = AppUtil.prefixPath() + '/config.html?#appid=' + selectedAppId;
                     }
+                };
 
-                }
-                //强制刷新
-                scope.$apply(function () {
-                    scope.copyedApps = scope.copyedApps;
+                UserService.load_user().then(function (result) {
+                    scope.userName = result.userId;
+                    scope.userDisplayName = result.name;
+                }, function (result) {
+
                 });
-            });
 
-            $(".search-input").on("click", function (event) {
-                event.stopPropagation();
-            });
-
-            $(document).on('click', function () {
-                scope.$apply(function () {
-                    scope.shouldShowAppList = false;
-                });
-            });
-
-            function clearAppsSelectedStatus() {
-                scope.copyedApps.forEach(function (app) {
-                    app.selected = false;
+                PermissionService.has_root_permission().then(function (result) {
+                    scope.hasRootPermission = result.hasPermission;
                 })
 
+                scope.changeLanguage = function (lang) {
+                    $translate.use(lang)
+                }
             }
-
-            function select(app) {
-                selectedApp = app;
-                scope.searchKey = app.name;
-                scope.shouldShowAppList = false;
-                clearAppsSelectedStatus();
-                selectedAppIdx = -1;
-
-            }
-
-            UserService.load_user().then(function (result) {
-                scope.userName = result.userId;
-            }, function (result) {
-
-            });
         }
-    }
 
-});
+    });
 
 /** env cluster selector*/
 directive_module.directive('apolloclusterselector', function ($compile, $window, AppService, AppUtil, toastr) {
     return {
         restrict: 'E',
-        templateUrl: '../../views/component/env-selector.html',
+        templateUrl: AppUtil.prefixPath() + '/views/component/env-selector.html',
         transclude: true,
         replace: true,
         scope: {
@@ -130,17 +127,16 @@ directive_module.directive('apolloclusterselector', function ($compile, $window,
             select: '=apolloSelect',
             defaultCheckedEnv: '=apolloDefaultCheckedEnv',
             defaultCheckedCluster: '=apolloDefaultCheckedCluster',
-            notCheckedEnv:'=apolloNotCheckedEnv',
+            notCheckedEnv: '=apolloNotCheckedEnv',
             notCheckedCluster: '=apolloNotCheckedCluster'
         },
         link: function (scope, element, attrs) {
-            
+
             scope.$watch("defaultCheckedEnv", refreshClusterList);
             scope.$watch("defaultCheckedCluster", refreshClusterList);
 
             refreshClusterList();
 
-            ////// load env //////
             function refreshClusterList() {
                 AppService.load_nav_tree(scope.appId).then(function (result) {
                     scope.clusters = [];
@@ -151,10 +147,10 @@ directive_module.directive('apolloclusterselector', function ($compile, $window,
                             cluster.env = env;
                             //default checked
                             cluster.checked = scope.defaultAllChecked ||
-                                              (cluster.env == scope.defaultCheckedEnv && cluster.name
-                                                                                         == scope.defaultCheckedCluster);
+                                (cluster.env == scope.defaultCheckedEnv && cluster.name
+                                    == scope.defaultCheckedCluster);
                             //not checked
-                            if (cluster.env == scope.notCheckedEnv && cluster.name == scope.notCheckedCluster){
+                            if (cluster.env == scope.notCheckedEnv && cluster.name == scope.notCheckedCluster) {
                                 cluster.checked = false;
                             }
 
@@ -162,11 +158,8 @@ directive_module.directive('apolloclusterselector', function ($compile, $window,
                         })
                     });
                     scope.select(collectSelectedClusters());
-                }, function (result) {
-                    toastr.error(AppUtil.errorMsg(result), "加载环境信息出错");
                 });
             }
-
 
             scope.envAllSelected = scope.defaultAllChecked;
 
@@ -206,20 +199,20 @@ directive_module.directive('apolloclusterselector', function ($compile, $window,
 });
 
 /** 必填项*/
-directive_module.directive('apollorequiredfiled', function ($compile, $window) {
+directive_module.directive('apollorequiredfield', function ($compile, $window) {
     return {
         restrict: 'E',
-        template: '<span style="color: red">*</span>',
+        template: '<strong style="color: red">*</strong>',
         transclude: true,
         replace: true
     }
 });
 
 /**  确认框 */
-directive_module.directive('apolloconfirmdialog', function ($compile, $window) {
+directive_module.directive('apolloconfirmdialog', function ($compile, $window, $sce,$translate,AppUtil) {
     return {
         restrict: 'E',
-        templateUrl: '../../views/component/confirm-dialog.html',
+        templateUrl: AppUtil.prefixPath() + '/views/component/confirm-dialog.html',
         transclude: true,
         replace: true,
         scope: {
@@ -227,25 +220,38 @@ directive_module.directive('apolloconfirmdialog', function ($compile, $window) {
             title: '=apolloTitle',
             detail: '=apolloDetail',
             showCancelBtn: '=apolloShowCancelBtn',
-            doConfirm: '=apolloConfirm'
+            doConfirm: '=apolloConfirm',
+            extraClass: '=apolloExtraClass',
+            confirmBtnText: '=?',
+            cancel: '='
         },
         link: function (scope, element, attrs) {
-            
+
+            scope.$watch("detail", function () {
+                scope.detailAsHtml = $sce.trustAsHtml(scope.detail);
+            });
+
+            if (!scope.confirmBtnText) {
+                scope.confirmBtnText = $translate.instant('ApolloConfirmDialog.DefaultConfirmBtnName');
+            }
+
             scope.confirm = function () {
-                if (scope.doConfirm){
+                if (scope.doConfirm) {
                     scope.doConfirm();
                 }
-            }
-            
+            };
+
+
+
         }
     }
 });
 
 /** entrance */
-directive_module.directive('apolloentrance', function ($compile, $window) {
+directive_module.directive('apolloentrance', function ($compile, $window,AppUtil) {
     return {
         restrict: 'E',
-        templateUrl: '../../views/component/entrance.html',
+        templateUrl: AppUtil.prefixPath() + '/views/component/entrance.html',
         transclude: true,
         replace: true,
         scope: {
@@ -258,29 +264,29 @@ directive_module.directive('apolloentrance', function ($compile, $window) {
     }
 });
 
-
 /** entrance */
-directive_module.directive('apollouserselector', function ($compile, $window) {
+directive_module.directive('apollouserselector', function ($compile, $window,AppUtil) {
     return {
         restrict: 'E',
-        templateUrl: '../../views/component/user-selector.html',
+        templateUrl: AppUtil.prefixPath() + '/views/component/user-selector.html',
         transclude: true,
         replace: true,
         scope: {
-            id: '=apolloId'
+            id: '=apolloId',
+            disabled: '='
         },
         link: function (scope, element, attrs) {
 
             scope.$watch("id", initSelect2);
 
-            var searchUsersAjax = {
+            var select2Options = {
                 ajax: {
-                    url: '/users',
+                    url: AppUtil.prefixPath() + '/users',
                     dataType: 'json',
                     delay: 250,
                     data: function (params) {
                         return {
-                            keyword: params.term ? params.term: '',
+                            keyword: params.term ? params.term : '',
                             limit: 100
                         }
                     },
@@ -288,9 +294,9 @@ directive_module.directive('apollouserselector', function ($compile, $window) {
                         var users = [];
                         data.forEach(function (user) {
                             users.push({
-                                           id: user.userId,
-                                           text: user.userId + " | " + user.name + " | " + user.email
-                                       })
+                                id: user.userId,
+                                text: user.userId + " | " + user.name + " | " + user.email
+                            })
                         });
                         return {
                             results: users
@@ -302,10 +308,60 @@ directive_module.directive('apollouserselector', function ($compile, $window) {
                 }
             };
 
-            function initSelect2(){
-                $('.' + scope.id).select2(searchUsersAjax);
+            function initSelect2() {
+                $('.' + scope.id).select2(select2Options);
             }
 
+
+        }
+    }
+});
+
+directive_module.directive('apollomultipleuserselector', function ($compile, $window,AppUtil) {
+    return {
+        restrict: 'E',
+        templateUrl: AppUtil.prefixPath() + '/views/component/multiple-user-selector.html',
+        transclude: true,
+        replace: true,
+        scope: {
+            id: '=apolloId'
+        },
+        link: function (scope, element, attrs) {
+
+            scope.$watch("id", initSelect2);
+
+            var searchUsersAjax = {
+                ajax: {
+                    url: AppUtil.prefixPath() + '/users',
+                    dataType: 'json',
+                    delay: 250,
+                    data: function (params) {
+                        return {
+                            keyword: params.term ? params.term : '',
+                            limit: 100
+                        }
+                    },
+                    processResults: function (data, params) {
+                        var users = [];
+                        data.forEach(function (user) {
+                            users.push({
+                                id: user.userId,
+                                text: user.userId + " | " + user.name + " | " + user.email
+                            })
+                        });
+                        return {
+                            results: users
+                        }
+
+                    },
+                    cache: true,
+                    minimumInputLength: 5
+                }
+            };
+
+            function initSelect2() {
+                $('.' + scope.id).select2(searchUsersAjax);
+            }
         }
     }
 });

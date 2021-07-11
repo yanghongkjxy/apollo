@@ -1,49 +1,67 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.eureka;
 
-import com.google.common.base.Splitter;
-import com.google.common.base.Strings;
 
-import com.ctrip.framework.apollo.biz.service.ServerConfigService;
-
-import org.springframework.beans.factory.annotation.Autowired;
+import com.ctrip.framework.apollo.biz.config.BizConfig;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.cloud.context.scope.refresh.RefreshScope;
 import org.springframework.cloud.netflix.eureka.EurekaClientConfigBean;
 import org.springframework.context.annotation.Primary;
-import org.springframework.core.env.Environment;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
 
 import java.util.List;
 
 @Component
 @Primary
+@ConditionalOnProperty(value = {"eureka.client.enabled"}, havingValue = "true", matchIfMissing = true)
 public class ApolloEurekaClientConfig extends EurekaClientConfigBean {
-  static final String EUREKA_URL_CONFIG = "eureka.service.url";
-  private static final Splitter URL_SPLITTER = Splitter.on(",").omitEmptyStrings();
 
-  @Autowired
-  private ServerConfigService serverConfigService;
+  private final BizConfig bizConfig;
+  private final RefreshScope refreshScope;
+  private static final String EUREKA_CLIENT_BEAN_NAME = "eurekaClient";
 
-  @Autowired
-  private Environment environment;
+  public ApolloEurekaClientConfig(final BizConfig bizConfig, final RefreshScope refreshScope) {
+    this.bizConfig = bizConfig;
+    this.refreshScope = refreshScope;
+  }
 
   /**
    * Assert only one zone: defaultZone, but multiple environments.
    */
   public List<String> getEurekaServerServiceUrls(String myZone) {
-    //First check if there is any system property override
-    if (!Strings.isNullOrEmpty(environment.getProperty(EUREKA_URL_CONFIG))) {
-      return URL_SPLITTER.splitToList(environment.getProperty(EUREKA_URL_CONFIG));
+    List<String> urls = bizConfig.eurekaServiceUrls();
+    return CollectionUtils.isEmpty(urls) ? super.getEurekaServerServiceUrls(myZone) : urls;
+  }
+
+  @EventListener
+  public void listenApplicationReadyEvent(ApplicationReadyEvent event) {
+    this.refreshEurekaClient();
+  }
+
+  private void refreshEurekaClient() {
+    if (!super.isFetchRegistry()) {
+        super.setFetchRegistry(true);
+        super.setRegisterWithEureka(true);
+        refreshScope.refresh(EUREKA_CLIENT_BEAN_NAME);
     }
-
-    //Second check if it is configured in database
-    String eurekaUrl = serverConfigService.getValue(EUREKA_URL_CONFIG);
-
-    if (!Strings.isNullOrEmpty(eurekaUrl)) {
-      return URL_SPLITTER.splitToList(eurekaUrl);
-
-    }
-
-    //fallback to default
-    return super.getEurekaServerServiceUrls(myZone);
   }
 
   @Override

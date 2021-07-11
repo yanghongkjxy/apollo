@@ -1,12 +1,28 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.adminservice.aop;
 
 
+import com.ctrip.framework.apollo.biz.config.BizConfig;
 import com.ctrip.framework.apollo.biz.entity.Namespace;
 import com.ctrip.framework.apollo.biz.entity.NamespaceLock;
 import com.ctrip.framework.apollo.biz.service.ItemService;
 import com.ctrip.framework.apollo.biz.service.NamespaceLockService;
 import com.ctrip.framework.apollo.biz.service.NamespaceService;
-import com.ctrip.framework.apollo.biz.utils.ApolloSwitcher;
 import com.ctrip.framework.apollo.common.exception.BadRequestException;
 import com.ctrip.framework.apollo.common.exception.ServiceException;
 
@@ -14,11 +30,11 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.runners.MockitoJUnitRunner;
+import org.mockito.junit.MockitoJUnitRunner;
 import org.springframework.dao.DataIntegrityViolationException;
 
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyLong;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -40,14 +56,14 @@ public class NamespaceLockTest {
   @Mock
   private ItemService itemService;
   @Mock
-  private ApolloSwitcher apolloSwitcher;
+  private BizConfig bizConfig;
   @InjectMocks
-  NamespaceLockAspect namespaceLockAspect;
+  NamespaceAcquireLockAspect namespaceLockAspect;
 
   @Test
   public void acquireLockWithNotLockedAndSwitchON() {
 
-    when(apolloSwitcher.isNamespaceLockSwitchOff()).thenReturn(true);
+    when(bizConfig.isNamespaceLockSwitchOff()).thenReturn(true);
 
     namespaceLockAspect.acquireLock(APP, CLUSTER, NAMESPACE, CURRENT_USER);
 
@@ -57,13 +73,13 @@ public class NamespaceLockTest {
   @Test
   public void acquireLockWithNotLockedAndSwitchOFF() {
 
-    when(apolloSwitcher.isNamespaceLockSwitchOff()).thenReturn(false);
+    when(bizConfig.isNamespaceLockSwitchOff()).thenReturn(false);
     when(namespaceService.findOne(APP, CLUSTER, NAMESPACE)).thenReturn(mockNamespace());
     when(namespaceLockService.findLock(anyLong())).thenReturn(null);
 
     namespaceLockAspect.acquireLock(APP, CLUSTER, NAMESPACE, CURRENT_USER);
 
-    verify(apolloSwitcher).isNamespaceLockSwitchOff();
+    verify(bizConfig).isNamespaceLockSwitchOff();
     verify(namespaceService).findOne(APP, CLUSTER, NAMESPACE);
     verify(namespaceLockService).findLock(anyLong());
     verify(namespaceLockService).tryLock(any());
@@ -73,13 +89,13 @@ public class NamespaceLockTest {
   @Test(expected = BadRequestException.class)
   public void acquireLockWithAlreadyLockedByOtherGuy() {
 
-    when(apolloSwitcher.isNamespaceLockSwitchOff()).thenReturn(false);
+    when(bizConfig.isNamespaceLockSwitchOff()).thenReturn(false);
     when(namespaceService.findOne(APP, CLUSTER, NAMESPACE)).thenReturn(mockNamespace());
     when(namespaceLockService.findLock(NAMESPACE_ID)).thenReturn(mockNamespaceLock(ANOTHER_USER));
 
     namespaceLockAspect.acquireLock(APP, CLUSTER, NAMESPACE, CURRENT_USER);
 
-    verify(apolloSwitcher).isNamespaceLockSwitchOff();
+    verify(bizConfig).isNamespaceLockSwitchOff();
     verify(namespaceService).findOne(APP, CLUSTER, NAMESPACE);
     verify(namespaceLockService).findLock(NAMESPACE_ID);
   }
@@ -87,13 +103,13 @@ public class NamespaceLockTest {
   @Test
   public void acquireLockWithAlreadyLockedBySelf() {
 
-    when(apolloSwitcher.isNamespaceLockSwitchOff()).thenReturn(false);
+    when(bizConfig.isNamespaceLockSwitchOff()).thenReturn(false);
     when(namespaceService.findOne(APP, CLUSTER, NAMESPACE)).thenReturn(mockNamespace());
     when(namespaceLockService.findLock(NAMESPACE_ID)).thenReturn(mockNamespaceLock(CURRENT_USER));
 
     namespaceLockAspect.acquireLock(APP, CLUSTER, NAMESPACE, CURRENT_USER);
 
-    verify(apolloSwitcher).isNamespaceLockSwitchOff();
+    verify(bizConfig).isNamespaceLockSwitchOff();
     verify(namespaceService).findOne(APP, CLUSTER, NAMESPACE);
     verify(namespaceLockService).findLock(NAMESPACE_ID);
   }
@@ -101,13 +117,13 @@ public class NamespaceLockTest {
   @Test
   public void acquireLockWithNamespaceIdSwitchOn(){
 
-    when(apolloSwitcher.isNamespaceLockSwitchOff()).thenReturn(false);
+    when(bizConfig.isNamespaceLockSwitchOff()).thenReturn(false);
     when(namespaceService.findOne(NAMESPACE_ID)).thenReturn(mockNamespace());
     when(namespaceLockService.findLock(NAMESPACE_ID)).thenReturn(null);
 
     namespaceLockAspect.acquireLock(NAMESPACE_ID, CURRENT_USER);
 
-    verify(apolloSwitcher).isNamespaceLockSwitchOff();
+    verify(bizConfig).isNamespaceLockSwitchOff();
     verify(namespaceService).findOne(NAMESPACE_ID);
     verify(namespaceLockService).findLock(NAMESPACE_ID);
     verify(namespaceLockService).tryLock(any());
@@ -116,14 +132,14 @@ public class NamespaceLockTest {
   @Test(expected = ServiceException.class)
   public void testDuplicateLock(){
 
-    when(apolloSwitcher.isNamespaceLockSwitchOff()).thenReturn(false);
+    when(bizConfig.isNamespaceLockSwitchOff()).thenReturn(false);
     when(namespaceService.findOne(NAMESPACE_ID)).thenReturn(mockNamespace());
     when(namespaceLockService.findLock(NAMESPACE_ID)).thenReturn(null);
     when(namespaceLockService.tryLock(any())).thenThrow(DataIntegrityViolationException.class);
 
     namespaceLockAspect.acquireLock(NAMESPACE_ID, CURRENT_USER);
 
-    verify(apolloSwitcher).isNamespaceLockSwitchOff();
+    verify(bizConfig).isNamespaceLockSwitchOff();
     verify(namespaceService).findOne(NAMESPACE_ID);
     verify(namespaceLockService, times(2)).findLock(NAMESPACE_ID);
     verify(namespaceLockService).tryLock(any());

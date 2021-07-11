@@ -1,36 +1,60 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.internals;
-
-import com.ctrip.framework.apollo.Config;
-import com.ctrip.framework.apollo.ConfigFile;
-import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
-import com.ctrip.framework.apollo.spi.ConfigFactory;
-import com.ctrip.framework.apollo.spi.ConfigFactoryManager;
-import com.ctrip.framework.apollo.spi.ConfigRegistry;
-
-import org.junit.Before;
-import org.junit.Test;
-import org.unidal.lookup.ComponentTestCase;
-
-import java.util.Set;
 
 import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.mock;
 
+import com.ctrip.framework.apollo.enums.ConfigSourceType;
+import java.util.Properties;
+import java.util.Set;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import com.ctrip.framework.apollo.Config;
+import com.ctrip.framework.apollo.ConfigFile;
+import com.ctrip.framework.apollo.build.MockInjector;
+import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
+import com.ctrip.framework.apollo.spi.ConfigFactory;
+import com.ctrip.framework.apollo.spi.ConfigFactoryManager;
+import com.ctrip.framework.apollo.util.ConfigUtil;
+
 /**
  * @author Jason Song(song_s@ctrip.com)
  */
-public class DefaultConfigManagerTest extends ComponentTestCase {
+public class DefaultConfigManagerTest {
   private DefaultConfigManager defaultConfigManager;
   private static String someConfigContent;
 
   @Before
   public void setUp() throws Exception {
-    super.setUp();
-    defineComponent(ConfigFactoryManager.class, MockConfigManager.class);
-    defaultConfigManager = (DefaultConfigManager) lookup(ConfigManager.class);
+    MockInjector.setInstance(ConfigFactoryManager.class, new MockConfigFactoryManager());
+    MockInjector.setInstance(ConfigUtil.class, new ConfigUtil());
+    defaultConfigManager = new DefaultConfigManager();
     someConfigContent = "someContent";
+  }
+
+  @After
+  public void tearDown() throws Exception {
+    MockInjector.reset();
   }
 
   @Test
@@ -84,7 +108,7 @@ public class DefaultConfigManagerTest extends ComponentTestCase {
 
   }
 
-  public static class MockConfigManager implements ConfigFactoryManager {
+  public static class MockConfigFactoryManager implements ConfigFactoryManager {
 
     @Override
     public ConfigFactory getFactory(String namespace) {
@@ -101,6 +125,11 @@ public class DefaultConfigManagerTest extends ComponentTestCase {
             public Set<String> getPropertyNames() {
               return null;
             }
+
+            @Override
+            public ConfigSourceType getSourceType() {
+              return null;
+            }
           };
         }
 
@@ -108,6 +137,11 @@ public class DefaultConfigManagerTest extends ComponentTestCase {
         public ConfigFile createConfigFile(String namespace, final ConfigFileFormat configFileFormat) {
           ConfigRepository someConfigRepository = mock(ConfigRepository.class);
           return new AbstractConfigFile(namespace, someConfigRepository) {
+
+            @Override
+            protected void update(Properties newProperties) {
+
+            }
 
             @Override
             public String getContent() {

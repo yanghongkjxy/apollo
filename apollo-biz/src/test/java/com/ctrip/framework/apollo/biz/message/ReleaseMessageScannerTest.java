@@ -1,5 +1,22 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.message;
 
+import com.ctrip.framework.apollo.biz.config.BizConfig;
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.SettableFuture;
 
@@ -10,7 +27,6 @@ import com.ctrip.framework.apollo.biz.repository.ReleaseMessageRepository;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
-import org.springframework.core.env.Environment;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.concurrent.TimeUnit;
@@ -26,7 +42,7 @@ public class ReleaseMessageScannerTest extends AbstractUnitTest {
   @Mock
   private ReleaseMessageRepository releaseMessageRepository;
   @Mock
-  private Environment env;
+  private BizConfig bizConfig;
   private int databaseScanInterval;
 
   @Before
@@ -34,9 +50,9 @@ public class ReleaseMessageScannerTest extends AbstractUnitTest {
     releaseMessageScanner = new ReleaseMessageScanner();
     ReflectionTestUtils
         .setField(releaseMessageScanner, "releaseMessageRepository", releaseMessageRepository);
-    ReflectionTestUtils.setField(releaseMessageScanner, "env", env);
+    ReflectionTestUtils.setField(releaseMessageScanner, "bizConfig", bizConfig);
     databaseScanInterval = 100; //100 ms
-    when(env.getProperty("apollo.message-scan.interval")).thenReturn(String.valueOf(databaseScanInterval));
+    when(bizConfig.releaseMessageScanIntervalInMilli()).thenReturn(databaseScanInterval);
     releaseMessageScanner.afterPropertiesSet();
   }
 

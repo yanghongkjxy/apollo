@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.service;
 
 import com.google.common.collect.Lists;
@@ -86,7 +102,7 @@ public class InstanceServiceTest extends AbstractIntegrationTest {
     String anotherReleaseKey = "anotherReleaseKey";
 
     InstanceConfig instanceConfig = instanceService.findInstanceConfig(someInstanceId,
-        someConfigAppId, someConfigClusterName, someConfigNamespaceName);
+        someConfigAppId, someConfigNamespaceName);
 
     assertNull(instanceConfig);
 
@@ -94,7 +110,7 @@ public class InstanceServiceTest extends AbstractIntegrationTest {
         someConfigClusterName, someConfigNamespaceName, someReleaseKey));
 
     instanceConfig = instanceService.findInstanceConfig(someInstanceId, someConfigAppId,
-        someConfigClusterName, someConfigNamespaceName);
+        someConfigNamespaceName);
 
     assertNotEquals(0, instanceConfig.getId());
     assertEquals(someReleaseKey, instanceConfig.getReleaseKey());
@@ -104,7 +120,7 @@ public class InstanceServiceTest extends AbstractIntegrationTest {
     instanceService.updateInstanceConfig(instanceConfig);
 
     InstanceConfig updated = instanceService.findInstanceConfig(someInstanceId, someConfigAppId,
-        someConfigClusterName, someConfigNamespaceName);
+        someConfigNamespaceName);
 
     assertEquals(instanceConfig.getId(), updated.getId());
     assertEquals(anotherReleaseKey, updated.getReleaseKey());
@@ -119,7 +135,7 @@ public class InstanceServiceTest extends AbstractIntegrationTest {
     String someConfigClusterName = "someConfigClusterName";
     String someConfigNamespaceName = "someConfigNamespaceName";
     Date someValidDate = new Date();
-    Pageable pageable = new PageRequest(0, 10);
+    Pageable pageable = PageRequest.of(0, 10);
     String someReleaseKey = "someReleaseKey";
 
     Calendar calendar = Calendar.getInstance();
@@ -165,10 +181,46 @@ public class InstanceServiceTest extends AbstractIntegrationTest {
         someConfigNamespaceName, someReleaseKey, someValidDate);
 
     Page<Instance> result = instanceService.findInstancesByNamespace(someConfigAppId,
-        someConfigClusterName, someConfigNamespaceName, new PageRequest(0, 10));
+        someConfigClusterName, someConfigNamespaceName, PageRequest.of(0, 10));
 
     assertEquals(Lists.newArrayList(someInstance, anotherInstance), result.getContent());
   }
+
+  @Test
+  @Rollback
+  public void testFindInstancesByNamespaceAndInstanceAppId() throws Exception {
+    String someConfigAppId = "someConfigAppId";
+    String someConfigClusterName = "someConfigClusterName";
+    String someConfigNamespaceName = "someConfigNamespaceName";
+    String someReleaseKey = "someReleaseKey";
+    Date someValidDate = new Date();
+
+    String someAppId = "someAppId";
+    String anotherAppId = "anotherAppId";
+    String someClusterName = "someClusterName";
+    String someDataCenter = "someDataCenter";
+    String someIp = "someIp";
+
+    Instance someInstance = instanceService.createInstance(assembleInstance(someAppId,
+        someClusterName, someDataCenter, someIp));
+    Instance anotherInstance = instanceService.createInstance(assembleInstance(anotherAppId,
+        someClusterName, someDataCenter, someIp));
+
+    prepareInstanceConfigForInstance(someInstance.getId(), someConfigAppId, someConfigClusterName,
+        someConfigNamespaceName, someReleaseKey, someValidDate);
+    prepareInstanceConfigForInstance(anotherInstance.getId(), someConfigAppId,
+        someConfigClusterName,
+        someConfigNamespaceName, someReleaseKey, someValidDate);
+
+    Page<Instance> result = instanceService.findInstancesByNamespaceAndInstanceAppId(someAppId,
+        someConfigAppId, someConfigClusterName, someConfigNamespaceName, PageRequest.of(0, 10));
+    Page<Instance> anotherResult = instanceService.findInstancesByNamespaceAndInstanceAppId(anotherAppId,
+        someConfigAppId, someConfigClusterName, someConfigNamespaceName, PageRequest.of(0, 10));
+
+    assertEquals(Lists.newArrayList(someInstance), result.getContent());
+    assertEquals(Lists.newArrayList(anotherInstance), anotherResult.getContent());
+  }
+
 
   @Test
   @Rollback

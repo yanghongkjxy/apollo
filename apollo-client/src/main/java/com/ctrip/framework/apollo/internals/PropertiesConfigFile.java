@@ -1,28 +1,46 @@
+/*
+ * Copyright 2021 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.internals;
+
+import java.util.Properties;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.ctrip.framework.apollo.core.enums.ConfigFileFormat;
 import com.ctrip.framework.apollo.core.utils.PropertiesUtil;
 import com.ctrip.framework.apollo.exceptions.ApolloConfigException;
+import com.ctrip.framework.apollo.tracer.Tracer;
 import com.ctrip.framework.apollo.util.ExceptionUtil;
-import com.dianping.cat.Cat;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.Properties;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * @author Jason Song(song_s@ctrip.com)
  */
 public class PropertiesConfigFile extends AbstractConfigFile {
-  private static final Logger logger = LoggerFactory.getLogger(PropertiesConfigFile.class);
   protected AtomicReference<String> m_contentCache;
 
   public PropertiesConfigFile(String namespace,
                               ConfigRepository configRepository) {
     super(namespace, configRepository);
     m_contentCache = new AtomicReference<>();
+  }
+
+  @Override
+  protected void update(Properties newProperties) {
+    m_configProperties.set(newProperties);
+    m_contentCache.set(null);
   }
 
   @Override
@@ -34,7 +52,7 @@ public class PropertiesConfigFile extends AbstractConfigFile {
   }
 
   String doGetContent() {
-    if (m_configProperties.get() == null) {
+    if (!this.hasContent()) {
       return null;
     }
 
@@ -45,7 +63,7 @@ public class PropertiesConfigFile extends AbstractConfigFile {
           new ApolloConfigException(String
               .format("Parse properties file content failed for namespace: %s, cause: %s",
                   m_namespace, ExceptionUtil.getDetailMessage(ex)));
-      Cat.logError(exception);
+      Tracer.logError(exception);
       throw exception;
     }
   }
@@ -60,9 +78,4 @@ public class PropertiesConfigFile extends AbstractConfigFile {
     return ConfigFileFormat.Properties;
   }
 
-  @Override
-  public synchronized void onRepositoryChange(String namespace, Properties newProperties) {
-    super.onRepositoryChange(namespace, newProperties);
-    m_contentCache.set(null);
-  }
 }
