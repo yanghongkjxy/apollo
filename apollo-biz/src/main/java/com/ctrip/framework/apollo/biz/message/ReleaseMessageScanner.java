@@ -1,64 +1,88 @@
+/*
+ * Copyright 2025 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.message;
 
-import com.google.common.collect.Lists;
-
-import com.ctrip.framework.apollo.biz.entity.ReleaseMessage;
-import com.ctrip.framework.apollo.biz.repository.ReleaseMessageRepository;
-import com.ctrip.framework.apollo.core.utils.ApolloThreadFactory;
-import com.dianping.cat.Cat;
-import com.dianping.cat.message.Message;
-import com.dianping.cat.message.Transaction;
+import com.google.common.collect.Maps;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.env.Environment;
 import org.springframework.util.CollectionUtils;
 
-import java.util.List;
-import java.util.Objects;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import com.ctrip.framework.apollo.biz.config.BizConfig;
+import com.ctrip.framework.apollo.biz.entity.ReleaseMessage;
+import com.ctrip.framework.apollo.biz.repository.ReleaseMessageRepository;
+import com.ctrip.framework.apollo.core.utils.ApolloThreadFactory;
+import com.ctrip.framework.apollo.tracer.Tracer;
+import com.ctrip.framework.apollo.tracer.spi.Transaction;
+import com.google.common.collect.Lists;
 
 /**
  * @author Jason Song(song_s@ctrip.com)
  */
 public class ReleaseMessageScanner implements InitializingBean {
   private static final Logger logger = LoggerFactory.getLogger(ReleaseMessageScanner.class);
-  private static final int DEFAULT_SCAN_INTERVAL_IN_MS = 1000;
-  @Autowired
-  private Environment env;
-  @Autowired
-  private ReleaseMessageRepository releaseMessageRepository;
+  private static final int missingReleaseMessageMaxAge = 10; // hardcoded to 10, could be configured
+                                                             // via BizConfig if necessary
+  private final BizConfig bizConfig;
+  private final ReleaseMessageRepository releaseMessageRepository;
   private int databaseScanInterval;
-  private List<ReleaseMessageListener> listeners;
-  private ScheduledExecutorService executorService;
+  private final List<ReleaseMessageListener> listeners;
+  private final ScheduledExecutorService executorService;
+  private final Map<Long, Integer> missingReleaseMessages; // missing release message id => age
+                                                           // counter
   private long maxIdScanned;
 
-  public ReleaseMessageScanner() {
+  public ReleaseMessageScanner(final BizConfig bizConfig,
+      final ReleaseMessageRepository releaseMessageRepository) {
+    this.bizConfig = bizConfig;
+    this.releaseMessageRepository = releaseMessageRepository;
     listeners = Lists.newCopyOnWriteArrayList();
-    executorService = Executors.newScheduledThreadPool(1, ApolloThreadFactory
-        .create("ReleaseMessageScanner", true));
+    executorService = Executors.newScheduledThreadPool(1,
+        ApolloThreadFactory.create("ReleaseMessageScanner", true));
+    missingReleaseMessages = Maps.newHashMap();
   }
 
   @Override
   public void afterPropertiesSet() throws Exception {
-    populateDataBaseInterval();
+    databaseScanInterval = bizConfig.releaseMessageScanIntervalInMilli();
     maxIdScanned = loadLargestMessageId();
-    executorService.scheduleWithFixedDelay((Runnable) () -> {
-      Transaction transaction = Cat.newTransaction("Apollo.ReleaseMessageScanner", "scanMessage");
+    executorService.scheduleWithFixedDelay(() -> {
+      Transaction transaction =
+          Tracer.newTransaction("Apollo.ReleaseMessageScanner", "scanMessage");
       try {
+        scanMissingMessages();
         scanMessages();
-        transaction.setStatus(Message.SUCCESS);
+        transaction.setStatus(Transaction.SUCCESS);
       } catch (Throwable ex) {
         transaction.setStatus(ex);
         logger.error("Scan and send message failed", ex);
       } finally {
         transaction.complete();
       }
-    }, getDatabaseScanIntervalMs(), getDatabaseScanIntervalMs(), TimeUnit.MILLISECONDS);
+    }, databaseScanInterval, databaseScanInterval, TimeUnit.MILLISECONDS);
 
   }
 
@@ -88,7 +112,7 @@ public class ReleaseMessageScanner implements InitializingBean {
    * @return whether there are more messages
    */
   private boolean scanAndSendMessages() {
-    //current batch is 500
+    // current batch is 500
     List<ReleaseMessage> releaseMessages =
         releaseMessageRepository.findFirst500ByIdGreaterThanOrderByIdAsc(maxIdScanned);
     if (CollectionUtils.isEmpty(releaseMessages)) {
@@ -96,8 +120,48 @@ public class ReleaseMessageScanner implements InitializingBean {
     }
     fireMessageScanned(releaseMessages);
     int messageScanned = releaseMessages.size();
-    maxIdScanned = releaseMessages.get(messageScanned - 1).getId();
+    long newMaxIdScanned = releaseMessages.get(messageScanned - 1).getId();
+    // check id gaps, possible reasons are release message not committed yet or already rolled back
+    if (newMaxIdScanned - maxIdScanned > messageScanned) {
+      recordMissingReleaseMessageIds(releaseMessages, maxIdScanned);
+    }
+    maxIdScanned = newMaxIdScanned;
     return messageScanned == 500;
+  }
+
+  private void scanMissingMessages() {
+    Set<Long> missingReleaseMessageIds = missingReleaseMessages.keySet();
+    Iterable<ReleaseMessage> releaseMessages =
+        releaseMessageRepository.findAllById(missingReleaseMessageIds);
+    fireMessageScanned(releaseMessages);
+    releaseMessages.forEach(releaseMessage -> {
+      missingReleaseMessageIds.remove(releaseMessage.getId());
+    });
+    growAndCleanMissingMessages();
+  }
+
+  private void growAndCleanMissingMessages() {
+    Iterator<Entry<Long, Integer>> iterator = missingReleaseMessages.entrySet().iterator();
+    while (iterator.hasNext()) {
+      Entry<Long, Integer> entry = iterator.next();
+      if (entry.getValue() > missingReleaseMessageMaxAge) {
+        iterator.remove();
+      } else {
+        entry.setValue(entry.getValue() + 1);
+      }
+    }
+  }
+
+  private void recordMissingReleaseMessageIds(List<ReleaseMessage> messages, long startId) {
+    for (ReleaseMessage message : messages) {
+      long currentId = message.getId();
+      if (currentId - startId > 1) {
+        for (long i = startId + 1; i < currentId; i++) {
+          missingReleaseMessages.putIfAbsent(i, 1);
+        }
+      }
+      startId = currentId;
+    }
   }
 
   /**
@@ -113,33 +177,16 @@ public class ReleaseMessageScanner implements InitializingBean {
    * Notify listeners with messages loaded
    * @param messages
    */
-  private void fireMessageScanned(List<ReleaseMessage> messages) {
+  private void fireMessageScanned(Iterable<ReleaseMessage> messages) {
     for (ReleaseMessage message : messages) {
       for (ReleaseMessageListener listener : listeners) {
         try {
           listener.handleMessage(message, Topics.APOLLO_RELEASE_TOPIC);
         } catch (Throwable ex) {
-          Cat.logError(ex);
+          Tracer.logError(ex);
           logger.error("Failed to invoke message listener {}", listener.getClass(), ex);
         }
       }
     }
-  }
-
-  private void populateDataBaseInterval() {
-    databaseScanInterval = DEFAULT_SCAN_INTERVAL_IN_MS;
-    try {
-      String interval = env.getProperty("apollo.message-scan.interval");
-      if (!Objects.isNull(interval)) {
-        databaseScanInterval = Integer.parseInt(interval);
-      }
-    } catch (Throwable ex) {
-      Cat.logError(ex);
-      logger.error("Load apollo message scan interval from system property failed", ex);
-    }
-  }
-
-  private int getDatabaseScanIntervalMs() {
-    return databaseScanInterval;
   }
 }

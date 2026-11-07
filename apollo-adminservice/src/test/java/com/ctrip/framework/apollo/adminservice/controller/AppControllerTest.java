@@ -1,5 +1,26 @@
+/*
+ * Copyright 2025 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.adminservice.controller;
 
+import com.ctrip.framework.apollo.biz.repository.AppRepository;
+import com.ctrip.framework.apollo.common.dto.AppDTO;
+import com.ctrip.framework.apollo.common.entity.App;
+import com.ctrip.framework.apollo.common.utils.BeanUtils;
+import com.ctrip.framework.apollo.common.utils.InputValidator;
 import org.junit.Assert;
 import org.junit.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -8,11 +29,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.context.jdbc.Sql.ExecutionPhase;
 import org.springframework.web.client.HttpClientErrorException;
-
-import com.ctrip.framework.apollo.common.entity.App;
-import com.ctrip.framework.apollo.biz.repository.AppRepository;
-import com.ctrip.framework.apollo.common.utils.BeanUtils;
-import com.ctrip.framework.apollo.common.dto.AppDTO;
+import static org.hamcrest.Matchers.containsString;
 
 public class AppControllerTest extends AbstractControllerTest {
 
@@ -20,7 +37,7 @@ public class AppControllerTest extends AbstractControllerTest {
   AppRepository appRepository;
 
   private String getBaseAppUrl() {
-    return "http://localhost:" + port + "/apps/";
+    return url("/apps");
   }
 
   @Test
@@ -34,11 +51,11 @@ public class AppControllerTest extends AbstractControllerTest {
     Assert.assertEquals(dto.getAppId(), result.getAppId());
     Assert.assertTrue(result.getId() > 0);
 
-    Boolean falseUnique =
-        restTemplate.getForObject(getBaseAppUrl() + dto.getAppId() + "/unique", Boolean.class);
+    Boolean falseUnique = restTemplate
+        .getForObject(getBaseAppUrl() + "/" + dto.getAppId() + "/unique", Boolean.class);
     Assert.assertFalse(falseUnique);
     Boolean trueUnique = restTemplate
-        .getForObject(getBaseAppUrl() + dto.getAppId() + "true" + "/unique", Boolean.class);
+        .getForObject(getBaseAppUrl() + "/" + dto.getAppId() + "true" + "/unique", Boolean.class);
     Assert.assertTrue(trueUnique);
   }
 
@@ -53,7 +70,7 @@ public class AppControllerTest extends AbstractControllerTest {
     Assert.assertEquals(dto.getAppId(), result.getAppId());
     Assert.assertTrue(result.getId() > 0);
 
-    App savedApp = appRepository.findOne(result.getId());
+    App savedApp = appRepository.findById(result.getId()).orElse(null);
     Assert.assertEquals(dto.getAppId(), savedApp.getAppId());
     Assert.assertNotNull(savedApp.getDataChangeCreatedTime());
   }
@@ -69,13 +86,13 @@ public class AppControllerTest extends AbstractControllerTest {
     Assert.assertEquals(dto.getAppId(), first.getAppId());
     Assert.assertTrue(first.getId() > 0);
 
-    App savedApp = appRepository.findOne(first.getId());
+    App savedApp = appRepository.findById(first.getId()).orElse(null);
     Assert.assertEquals(dto.getAppId(), savedApp.getAppId());
     Assert.assertNotNull(savedApp.getDataChangeCreatedTime());
 
     try {
       restTemplate.postForEntity(getBaseAppUrl(), dto, AppDTO.class);
-    }catch (HttpClientErrorException e){
+    } catch (HttpClientErrorException e) {
       Assert.assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
     }
 
@@ -85,10 +102,10 @@ public class AppControllerTest extends AbstractControllerTest {
   @Sql(scripts = "/controller/cleanup.sql", executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
   public void testFind() {
     AppDTO dto = generateSampleDTOData();
-    App app = BeanUtils.transfrom(App.class, dto);
+    App app = BeanUtils.transform(App.class, dto);
     app = appRepository.save(app);
 
-    AppDTO result = restTemplate.getForObject(getBaseAppUrl() + dto.getAppId(), AppDTO.class);
+    AppDTO result = restTemplate.getForObject(getBaseAppUrl() + "/" + dto.getAppId(), AppDTO.class);
     Assert.assertEquals(dto.getAppId(), result.getAppId());
     Assert.assertEquals(dto.getName(), result.getName());
   }
@@ -96,20 +113,35 @@ public class AppControllerTest extends AbstractControllerTest {
   @Test(expected = HttpClientErrorException.class)
   @Sql(scripts = "/controller/cleanup.sql", executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
   public void testFindNotExist() {
-    restTemplate.getForEntity(getBaseAppUrl() + "notExists", AppDTO.class);
+    restTemplate.getForEntity(getBaseAppUrl() + "/notExists", AppDTO.class);
   }
 
   @Test
   @Sql(scripts = "/controller/cleanup.sql", executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
   public void testDelete() {
     AppDTO dto = generateSampleDTOData();
-    App app = BeanUtils.transfrom(App.class, dto);
+    App app = BeanUtils.transform(App.class, dto);
     app = appRepository.save(app);
 
-    restTemplate.delete("http://localhost:{port}/apps/{appId}?operator={operator}", port, app.getAppId(), "test");
+    restTemplate.delete(url("/apps/{appId}?operator={operator}"), app.getAppId(), "test");
 
-    App deletedApp = appRepository.findOne(app.getId());
+    App deletedApp = appRepository.findById(app.getId()).orElse(null);
     Assert.assertNull(deletedApp);
+  }
+
+  @Test
+  @Sql(scripts = "/controller/cleanup.sql", executionPhase = ExecutionPhase.AFTER_TEST_METHOD)
+  public void shouldFailedWhenAppIdIsInvalid() {
+    AppDTO dto = generateSampleDTOData();
+    dto.setAppId("invalid app id");
+    try {
+      restTemplate.postForEntity(getBaseAppUrl(), dto, String.class);
+      Assert.fail("Should throw");
+    } catch (HttpClientErrorException e) {
+      Assert.assertEquals(HttpStatus.BAD_REQUEST, e.getStatusCode());
+      Assert.assertThat(new String(e.getResponseBodyAsByteArray()),
+          containsString(InputValidator.INVALID_CLUSTER_NAMESPACE_MESSAGE));
+    }
   }
 
   private AppDTO generateSampleDTOData() {

@@ -1,53 +1,81 @@
+/*
+ * Copyright 2025 Apollo Authors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 package com.ctrip.framework.apollo.biz.service;
-
-import com.google.common.base.Strings;
 
 import com.ctrip.framework.apollo.biz.entity.ServerConfig;
 import com.ctrip.framework.apollo.biz.repository.ServerConfigRepository;
-import com.ctrip.framework.apollo.core.ConfigConsts;
-import com.ctrip.framework.foundation.Foundation;
-
-import org.springframework.beans.factory.annotation.Autowired;
+import com.ctrip.framework.apollo.common.exception.NotFoundException;
+import com.google.common.collect.Lists;
+import java.util.List;
+import java.util.Objects;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
 /**
- * @author Jason Song(song_s@ctrip.com)
+ * @author kl (http://kailing.pub)
+ * @since 2022/12/13
  */
 @Service
 public class ServerConfigService {
-  @Autowired
-  private ServerConfigRepository serverConfigRepository;
 
-  public String getValue(String key) {
-    ServerConfig serverConfig = null;
+  private final ServerConfigRepository serverConfigRepository;
 
-    //1. Load from cluster config
-    if (!Strings.isNullOrEmpty(System.getProperty(ConfigConsts.APOLLO_CLUSTER_KEY))) {
-      serverConfig =
-          serverConfigRepository.findTopByKeyAndCluster(key, System.getProperty(ConfigConsts.APOLLO_CLUSTER_KEY));
-    }
-
-    //2. Fall back to data center config
-    if (serverConfig == null && !Strings.isNullOrEmpty(getDataCenter())) {
-      serverConfig = serverConfigRepository.findTopByKeyAndCluster(key, getDataCenter());
-    }
-
-    //3. Fall back to default cluster config
-    if (serverConfig == null) {
-      serverConfig =
-          serverConfigRepository.findTopByKeyAndCluster(key, ConfigConsts.CLUSTER_NAME_DEFAULT);
-    }
-
-    return serverConfig == null ? null : serverConfig.getValue();
+  public ServerConfigService(ServerConfigRepository serverConfigRepository) {
+    this.serverConfigRepository = serverConfigRepository;
   }
 
-  public String getValue(String key, String defaultValue) {
-    String value = getValue(key);
-    return value == null ? defaultValue : value;
+  public List<ServerConfig> findAll() {
+    Iterable<ServerConfig> serverConfigs = serverConfigRepository.findAll();
+    return Lists.newArrayList(serverConfigs);
   }
 
-  String getDataCenter() {
-    return Foundation.server().getDataCenter();
+  @Transactional
+  public ServerConfig createOrUpdateConfig(ServerConfig serverConfig) {
+    if (Objects.isNull(serverConfig.getCluster())) {
+      serverConfig.setCluster("default");
+    }
+
+    ServerConfig storedConfig = serverConfigRepository.findTopByKeyAndCluster(serverConfig.getKey(),
+        serverConfig.getCluster());
+
+    if (Objects.isNull(storedConfig)) {// create
+      serverConfig.setId(0L);// 为空，设置ID 为0，jpa执行新增操作
+      return serverConfigRepository.save(serverConfig);
+    }
+
+    // update
+    storedConfig.setComment(serverConfig.getComment());
+    storedConfig.setDataChangeLastModifiedBy(serverConfig.getDataChangeLastModifiedBy());
+    storedConfig.setValue(serverConfig.getValue());
+
+    return serverConfigRepository.save(storedConfig);
+  }
+
+  @Transactional
+  public void deleteConfig(String key, String cluster, String operator) {
+    ServerConfig storedConfig = serverConfigRepository.findTopByKeyAndCluster(key, cluster);
+
+    if (Objects.isNull(storedConfig)) {
+      throw new NotFoundException("server config not found for key:%s, cluster:%s", key, cluster);
+    }
+
+    storedConfig.setDeleted(true);
+    storedConfig.setDataChangeLastModifiedBy(operator);
+    serverConfigRepository.save(storedConfig);
   }
 
 }
